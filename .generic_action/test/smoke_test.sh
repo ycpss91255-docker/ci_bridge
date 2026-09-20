@@ -6,7 +6,7 @@ readonly TEST_DIR
 REPO_ROOT="$(cd "${TEST_DIR}/../.." && pwd)"
 readonly REPO_ROOT
 readonly CLI="${REPO_ROOT}/.generic_action/ci-bridge"
-readonly TOML_FIXTURE="${TEST_DIR}/fixtures/toml-kv.sh"
+readonly TOML_FIXTURE="${TEST_DIR}/fixtures/toml_kv.py"
 
 fail() {
   printf 'FAIL: %s\n' "$*" >&2

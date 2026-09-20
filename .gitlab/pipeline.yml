@@ -3,6 +3,17 @@ stages:
 
 ci-rollup:
   stage: test
+  image: docker:27.5.1-cli
+  services:
+    - name: docker:27.5.1-dind
+      alias: docker
+      command: ["--tls=false"]
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  before_script:
+    - apk add --no-cache bash python3
+    - docker info
   script:
     - .generic_action/ci-bridge run smoke
     - .generic_action/test/smoke_test.sh

@@ -25,10 +25,13 @@ The platform adapters only provide checkout and runner orchestration. Both call 
 
 `ci-bridge` parses `ci.toml` with the pinned
 `ghcr.io/ycpss91255-docker/toml-bridge:v0.1.0` image. The host contract is Docker and Bash.
+The GitLab adapter provisions both with a pinned Docker CLI image and a
+Docker-in-Docker service; its runner must allow privileged services.
 
 ## Validate locally
 
-Run the fast contract test without Docker or network access:
+Run the fast contract test without Docker or network access. This path uses
+Python 3.11+ only as a test adapter and still parses the real `ci.toml`:
 
 ```sh
 .generic_action/test/smoke_test.sh
