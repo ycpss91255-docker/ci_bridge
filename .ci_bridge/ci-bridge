@@ -23,10 +23,15 @@ die() {
   exit 1
 }
 
-resolve() {
-  command -v docker >/dev/null 2>&1 || die 'docker is required to resolve TOML configuration'
-  command -v tar >/dev/null 2>&1 || die 'tar is required to send the repository to the resolver'
+require_runtime() {
+  local command
+  for command in docker tar realpath sha256sum awk; do
+    command -v "${command}" >/dev/null 2>&1 \
+      || die "required host command not found: ${command}"
+  done
+}
 
+resolve() {
   local mode="$1"
   local target="${2:-}"
   tar -C "${REPO_ROOT}" -cf - \
@@ -96,26 +101,34 @@ execute_plan() {
 
 main() {
   local command="${1:-}"
+  local resolved_plan
   case "${command}" in
     validate)
       [[ "$#" -eq 1 ]] || die 'validate accepts no arguments'
-      resolve pipeline ci >/dev/null
+      require_runtime
+      resolved_plan="$(resolve pipeline ci)"
+      [[ -n "${resolved_plan}" ]] || die 'resolved plan contains zero tasks'
+      validate_plan_scripts "${resolved_plan}" >/dev/null
       printf 'ci-bridge: config valid\n'
       ;;
     catalog)
       [[ "$#" -eq 1 ]] || die 'catalog accepts no arguments'
+      require_runtime
       resolve catalog
       ;;
     plan)
       [[ "$#" -eq 2 ]] || die 'plan expects one pipeline name'
+      require_runtime
       resolve pipeline "$2"
       ;;
     run)
       [[ "$#" -eq 2 ]] || die 'run expects one action ID'
+      require_runtime
       execute_plan action "$2"
       ;;
     pipeline)
       [[ "$#" -eq 2 ]] || die 'pipeline expects one pipeline name'
+      require_runtime
       execute_plan pipeline "$2"
       ;;
     -h|--help|'')
