@@ -1,0 +1,146 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+readonly REPO_ROOT
+readonly TOML_BRIDGE_IMAGE='ghcr.io/ycpss91255-docker/toml-bridge@sha256:0a01f9387607681b5ec4e2aedcef7108b8984dd29fd36c24e62d7ec4f7ab2e5f'
+
+usage() {
+  cat <<'EOF'
+Usage:
+  .ci_bridge/ci-bridge validate
+  .ci_bridge/ci-bridge catalog
+  .ci_bridge/ci-bridge plan <pipeline>
+  .ci_bridge/ci-bridge run <action>
+  .ci_bridge/ci-bridge pipeline <pipeline>
+EOF
+}
+
+die() {
+  printf 'ci-bridge: %s\n' "$*" >&2
+  exit 1
+}
+
+require_runtime() {
+  local command
+  for command in docker tar realpath sha256sum awk; do
+    command -v "${command}" >/dev/null 2>&1 \
+      || die "required host command not found: ${command}"
+  done
+}
+
+resolve() {
+  local mode="$1"
+  local target="${2:-}"
+  tar -C "${REPO_ROOT}" -cf - \
+      .ci_bridge/resolve.py .ci_action ci-project.toml \
+    | docker run --rm -i \
+      --env "CI_BRIDGE_MODE=${mode}" \
+      --env "CI_BRIDGE_TARGET=${target}" \
+      --entrypoint sh \
+      "${TOML_BRIDGE_IMAGE}" \
+      -ec '
+        mkdir -p /workspace
+        tar -xf - -C /workspace
+        set -- "${CI_BRIDGE_MODE}"
+        if [ -n "${CI_BRIDGE_TARGET}" ]; then
+          set -- "$@" "${CI_BRIDGE_TARGET}"
+        fi
+        exec python3 /workspace/.ci_bridge/resolve.py --repo-root /workspace "$@"
+      '
+}
+
+script_identity() {
+  local script_path="$1"
+  local resolved_script
+
+  resolved_script="$(realpath -e -- "${REPO_ROOT}/${script_path}")" \
+    || die "script not found: ${script_path}"
+  case "${resolved_script}" in
+    "${REPO_ROOT}"/*) ;;
+    *) die "script resolves outside the repository: ${script_path}" ;;
+  esac
+  [[ -f "${resolved_script}" ]] || die "script is not a regular file: ${script_path}"
+  [[ -x "${resolved_script}" ]] || die "script is not executable: ${script_path}"
+  sha256sum -- "${resolved_script}" | awk '{print $1}'
+}
+
+validate_plan_scripts() {
+  local resolved_plan="$1"
+  local action_id script_path digest
+
+  while IFS=$'\t' read -r action_id script_path; do
+    [[ -n "${action_id}" && -n "${script_path}" ]] || die 'resolver returned a malformed task'
+    digest="$(script_identity "${script_path}")"
+    printf '%s\t%s\t%s\n' "${action_id}" "${script_path}" "${digest}"
+  done <<< "${resolved_plan}"
+}
+
+execute_plan() {
+  local mode="$1"
+  local target="$2"
+  local resolved_plan validated_plan action_id script_path expected_digest actual_digest
+
+  resolved_plan="$(resolve "${mode}" "${target}")"
+  [[ -n "${resolved_plan}" ]] || die 'resolved plan contains zero tasks'
+  validated_plan="$(validate_plan_scripts "${resolved_plan}")"
+
+  while IFS=$'\t' read -r action_id script_path expected_digest; do
+    actual_digest="$(script_identity "${script_path}")"
+    [[ "${actual_digest}" == "${expected_digest}" ]] \
+      || die "script changed after plan validation: ${script_path}"
+    printf 'ci-bridge: running %s (%s)\n' "${action_id}" "${script_path}"
+    (
+      cd "${REPO_ROOT}"
+      CI_BRIDGE_ACTION_ID="${action_id}" "${REPO_ROOT}/${script_path}"
+    )
+  done <<< "${validated_plan}"
+}
+
+main() {
+  local command="${1:-}"
+  local resolved_plan
+  case "${command}" in
+    validate)
+      [[ "$#" -eq 1 ]] || die 'validate accepts no arguments'
+      require_runtime
+      resolved_plan="$(resolve pipeline ci)"
+      [[ -n "${resolved_plan}" ]] || die 'resolved plan contains zero tasks'
+      validate_plan_scripts "${resolved_plan}" >/dev/null
+      printf 'ci-bridge: config valid\n'
+      ;;
+    catalog)
+      [[ "$#" -eq 1 ]] || die 'catalog accepts no arguments'
+      require_runtime
+      resolve catalog
+      ;;
+    plan)
+      [[ "$#" -eq 2 ]] || die 'plan expects one pipeline name'
+      require_runtime
+      resolve pipeline "$2"
+      ;;
+    run)
+      [[ "$#" -eq 2 ]] || die 'run expects one action ID'
+      require_runtime
+      execute_plan action "$2"
+      ;;
+    pipeline)
+      [[ "$#" -eq 2 ]] || die 'pipeline expects one pipeline name'
+      require_runtime
+      execute_plan pipeline "$2"
+      ;;
+    -h|--help|'')
+      usage
+      ;;
+    *)
+      usage >&2
+      die "unknown command: ${command}"
+      ;;
+  esac
+}
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

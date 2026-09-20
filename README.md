@@ -1,0 +1,64 @@
+# ci_bridge
+
+A minimal proof of concept for running one validated task plan locally, in
+GitHub Actions, and in GitLab CI.
+
+## Architecture
+
+```text
+.ci_bridge/                    managed resolver and executor
+.ci_action/catalog/*.toml      managed approved action catalog
+.github/                       managed GitHub adapter
+.gitlab/                       managed GitLab adapter
+ci-project.toml                downstream task selection and script bindings
+test/, scripts/, src/          downstream-owned, locally runnable content
+```
+
+The action catalog is auto-discovered. File order has no task semantics; action
+IDs must be unique. `ci-project.toml` selects approved actions, and the bridge
+validates the complete resolved plan before executing its first task.
+
+Both platform adapters call the same command:
+
+```sh
+.ci_bridge/ci-bridge pipeline ci
+```
+
+The bridge uses `toml-bridge:v0.1.0` pinned by immutable digest as its
+Python/TOML runtime.
+The host contract is Bash plus `docker`, `tar`, `realpath`, `sha256sum`, and
+`awk`. The GitLab adapter provisions these tools, Docker CLI, and
+Docker-in-Docker; its runner must allow privileged services.
+Only the resolver, managed catalog, and project manifest are streamed to the
+resolver container, so a remote or DinD daemon does not need direct access to
+the job filesystem. Downstream scripts remain local; the bridge validates
+their containment and SHA-256 identity before execution and rechecks each one
+immediately before it runs.
+
+## Commands
+
+```sh
+.ci_bridge/ci-bridge validate
+.ci_bridge/ci-bridge catalog
+.ci_bridge/ci-bridge plan ci
+.ci_bridge/ci-bridge run test
+.ci_bridge/ci-bridge pipeline ci
+```
+
+Expected pipeline output:
+
+```text
+ci-bridge: running test (test/run.sh)
+downstream-test: ok
+```
+
+Run the contract test with Python 3.11+ and Docker:
+
+```sh
+.ci_bridge/test/contract_test.sh
+```
+
+This demo intentionally supports one sequential `ci` pipeline. Parallel DAG
+execution, matrix expansion, distribution to downstream repositories, cache,
+artifacts, and result normalization remain outside this first architecture
+check.
