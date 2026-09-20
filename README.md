@@ -24,10 +24,12 @@ Both platform adapters call the same command:
 .ci_bridge/ci-bridge pipeline ci
 ```
 
-The bridge uses the pinned
-`ghcr.io/ycpss91255-docker/toml-bridge:v0.1.0` image as its Python/TOML runtime.
+The bridge uses `toml-bridge:v0.1.0` pinned by immutable digest as its
+Python/TOML runtime.
 The host contract is Docker and Bash. The GitLab adapter provisions Docker CLI
 and Docker-in-Docker; its runner must allow privileged services.
+The repository snapshot is streamed to the resolver container, so a remote or
+DinD daemon does not need direct access to the job container's filesystem.
 
 ## Commands
 
@@ -46,7 +48,7 @@ ci-bridge: running test (test/run.sh)
 downstream-test: ok
 ```
 
-Run the fast contract test with Python 3.11+ and no Docker/network access:
+Run the contract test with Python 3.11+ and Docker:
 
 ```sh
 .ci_bridge/test/contract_test.sh

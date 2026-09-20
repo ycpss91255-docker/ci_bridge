@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly SCRIPT_DIR
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 readonly REPO_ROOT
-readonly TOML_BRIDGE_IMAGE="${TOML_BRIDGE_IMAGE:-ghcr.io/ycpss91255-docker/toml-bridge:v0.1.0}"
+readonly TOML_BRIDGE_IMAGE='ghcr.io/ycpss91255-docker/toml-bridge@sha256:0a01f9387607681b5ec4e2aedcef7108b8984dd29fd36c24e62d7ec4f7ab2e5f'
 
 usage() {
   cat <<'EOF'
@@ -24,19 +24,26 @@ die() {
 }
 
 resolve() {
-  if [[ -n "${CI_BRIDGE_RESOLVER_COMMAND:-}" ]]; then
-    "${CI_BRIDGE_RESOLVER_COMMAND}" \
-      "${SCRIPT_DIR}/resolve.py" --repo-root "${REPO_ROOT}" "$@"
-    return
-  fi
-
   command -v docker >/dev/null 2>&1 || die 'docker is required to resolve TOML configuration'
-  docker run --rm \
-    --volume "${REPO_ROOT}:/workspace:ro" \
-    --workdir /workspace \
-    --entrypoint python3 \
-    "${TOML_BRIDGE_IMAGE}" \
-    .ci_bridge/resolve.py --repo-root /workspace "$@"
+  command -v tar >/dev/null 2>&1 || die 'tar is required to send the repository to the resolver'
+
+  local mode="$1"
+  local target="${2:-}"
+  tar --exclude=.git --exclude=__pycache__ -C "${REPO_ROOT}" -cf - . \
+    | docker run --rm -i \
+      --env "CI_BRIDGE_MODE=${mode}" \
+      --env "CI_BRIDGE_TARGET=${target}" \
+      --entrypoint sh \
+      "${TOML_BRIDGE_IMAGE}" \
+      -ec '
+        mkdir -p /workspace
+        tar -xf - -C /workspace
+        set -- "${CI_BRIDGE_MODE}"
+        if [ -n "${CI_BRIDGE_TARGET}" ]; then
+          set -- "$@" "${CI_BRIDGE_TARGET}"
+        fi
+        exec python3 /workspace/.ci_bridge/resolve.py --repo-root /workspace "$@"
+      '
 }
 
 execute_plan() {

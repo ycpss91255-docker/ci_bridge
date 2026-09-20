@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import tomllib
 from dataclasses import dataclass
@@ -14,8 +15,9 @@ from typing import NoReturn
 SCHEMA_VERSION = 1
 CATALOG_TOP_LEVEL_KEYS = {"schema_version", "action"}
 ACTION_KEYS = {"id", "description", "required_bindings"}
-PROJECT_TOP_LEVEL_KEYS = {"schema_version", "pipelines", "bindings"}
+PROJECT_TOP_LEVEL_KEYS = {"schema_version", "pipeline", "bindings"}
 BINDING_KEYS = {"script"}
+IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9_-]*$")
 
 
 class ConfigError(Exception):
@@ -67,6 +69,12 @@ def require_schema_version(config: dict[str, object], source: Path) -> None:
         )
 
 
+def require_identifier(value: object, context: str) -> str:
+    if not isinstance(value, str) or IDENTIFIER_PATTERN.fullmatch(value) is None:
+        fail(f"{context} must match {IDENTIFIER_PATTERN.pattern}: {value!r}")
+    return value
+
+
 def load_catalog(catalog_dir: Path) -> dict[str, Action]:
     sources = sorted(catalog_dir.glob("*.toml"))
     if not sources:
@@ -86,8 +94,7 @@ def load_catalog(catalog_dir: Path) -> dict[str, Action]:
         action_id = raw_action.get("id")
         description = raw_action.get("description")
         required_bindings = raw_action.get("required_bindings")
-        if not isinstance(action_id, str) or not action_id:
-            fail(f"{source}: action.id must be a non-empty string")
+        action_id = require_identifier(action_id, f"{source}: action.id")
         if not isinstance(description, str) or not description:
             fail(f"{source}: action.description must be a non-empty string")
         if not isinstance(required_bindings, list) or not required_bindings:
@@ -123,6 +130,8 @@ def resolve_script(repo_root: Path, raw_path: object, context: str) -> Path:
         fail(f"{context}: script must be a non-empty string")
 
     relative_path = Path(raw_path)
+    if any(character in raw_path for character in "\t\r\n"):
+        fail(f"{context}: script contains a forbidden control character")
     if relative_path.is_absolute() or ".." in relative_path.parts:
         fail(f"{context}: script must be a repo-relative path without '..': {raw_path}")
 
@@ -138,18 +147,60 @@ def resolve_script(repo_root: Path, raw_path: object, context: str) -> Path:
     return resolved_script.relative_to(resolved_root)
 
 
-def load_project(repo_root: Path) -> dict[str, object]:
+def load_project(
+    repo_root: Path, actions: dict[str, Action]
+) -> dict[str, object]:
     source = repo_root / "ci-project.toml"
     config = load_toml(source)
     require_exact_keys(config, PROJECT_TOP_LEVEL_KEYS, str(source))
     require_schema_version(config, source)
 
-    pipelines = config.get("pipelines")
+    pipeline = config.get("pipeline")
     bindings = config.get("bindings")
-    if not isinstance(pipelines, dict) or not pipelines:
-        fail(f"{source}: pipelines must be a non-empty TOML table")
+    if not isinstance(pipeline, list) or not pipeline:
+        fail(f"{source}: pipeline must select at least one action")
+    if len(set(map(str, pipeline))) != len(pipeline):
+        fail(f"{source}: pipeline contains duplicate action IDs")
+    selected_ids = [
+        require_identifier(action_id, f"{source}: pipeline action ID")
+        for action_id in pipeline
+    ]
+    unknown_actions = sorted(set(selected_ids) - set(actions))
+    if unknown_actions:
+        fail(f"{source}: pipeline selects unknown action(s): {', '.join(unknown_actions)}")
     if not isinstance(bindings, dict):
         fail(f"{source}: bindings must be a TOML table")
+
+    for raw_action_id, raw_binding in bindings.items():
+        action_id = require_identifier(raw_action_id, f"{source}: binding action ID")
+        action = actions.get(action_id)
+        if action is None:
+            fail(f"{source}: binding names unknown action: {action_id}")
+        if not isinstance(raw_binding, dict):
+            fail(f"{source}: bindings.{action_id} must be a TOML table")
+        require_exact_keys(
+            raw_binding, BINDING_KEYS, f"{source}: bindings.{action_id}"
+        )
+        missing = [key for key in action.required_bindings if key not in raw_binding]
+        if missing:
+            fail(
+                f"action '{action_id}' missing required binding(s): "
+                f"{', '.join(missing)}"
+            )
+        resolve_script(
+            repo_root,
+            raw_binding["script"],
+            f"{source}: bindings.{action_id}",
+        )
+
+    missing_binding_tables = [
+        action_id for action_id in selected_ids if action_id not in bindings
+    ]
+    if missing_binding_tables:
+        fail(
+            f"{source}: selected action(s) missing binding tables: "
+            f"{', '.join(missing_binding_tables)}"
+        )
     return config
 
 
@@ -158,24 +209,16 @@ def selected_action_ids(
 ) -> list[str]:
     if mode == "action":
         return [target]
-
-    pipelines = project["pipelines"]
-    assert isinstance(pipelines, dict)
-    selected = pipelines.get(target)
-    if selected is None:
+    if target != "ci":
         fail(f"unknown pipeline: {target}")
-    if not isinstance(selected, list) or not selected:
-        fail(f"pipeline '{target}' must select at least one action")
-    if not all(isinstance(item, str) and item for item in selected):
-        fail(f"pipeline '{target}' action IDs must be non-empty strings")
-    if len(set(selected)) != len(selected):
-        fail(f"pipeline '{target}' contains duplicate action IDs")
+    selected = project["pipeline"]
+    assert isinstance(selected, list)
     return selected
 
 
 def build_plan(repo_root: Path, mode: str, target: str) -> list[PlannedTask]:
     actions = load_catalog(repo_root / ".ci_action" / "catalog")
-    project = load_project(repo_root)
+    project = load_project(repo_root, actions)
     bindings = project["bindings"]
     assert isinstance(bindings, dict)
 
@@ -188,15 +231,6 @@ def build_plan(repo_root: Path, mode: str, target: str) -> list[PlannedTask]:
         raw_binding = bindings.get(action_id)
         if not isinstance(raw_binding, dict):
             fail(f"action '{action_id}' requires a [bindings.{action_id}] table")
-        require_exact_keys(
-            raw_binding, BINDING_KEYS, f"ci-project.toml: bindings.{action_id}"
-        )
-        missing = [key for key in action.required_bindings if key not in raw_binding]
-        if missing:
-            fail(
-                f"action '{action_id}' missing required binding(s): "
-                f"{', '.join(missing)}"
-            )
 
         script = resolve_script(
             repo_root,

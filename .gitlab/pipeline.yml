@@ -3,9 +3,9 @@ stages:
 
 ci-rollup:
   stage: test
-  image: docker:27.5.1-cli
+  image: docker@sha256:851f91d241214e7c6db86513b270d58776379aacc5eb9c4a87e5b47115e3065c # 27.5.1-cli
   services:
-    - name: docker:27.5.1-dind
+    - name: docker@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce # 27.5.1-dind
       alias: docker
       command: ["--tls=false"]
   variables:

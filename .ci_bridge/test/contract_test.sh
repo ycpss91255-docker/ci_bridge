@@ -20,23 +20,19 @@ assert_equal() {
   [[ "${actual}" == "${expected}" ]] || fail "expected '${expected}', got '${actual}'"
 }
 
-run_cli() {
-  CI_BRIDGE_RESOLVER_COMMAND=python3 "${CLI}" "$@"
-}
-
-validate_output="$(run_cli validate)"
+validate_output="$("${CLI}" validate)"
 assert_equal 'ci-bridge: config valid' "${validate_output}"
 
-catalog_output="$(run_cli catalog)"
+catalog_output="$("${CLI}" catalog)"
 assert_equal $'test\t.ci_action/catalog/test.toml' "${catalog_output}"
 
-plan_output="$(run_cli plan ci)"
+plan_output="$("${CLI}" plan ci)"
 assert_equal $'test\ttest/run.sh' "${plan_output}"
 
-run_output="$(run_cli pipeline ci)"
+run_output="$("${CLI}" pipeline ci)"
 assert_equal $'ci-bridge: running test (test/run.sh)\ndownstream-test: ok' "${run_output}"
 
-if run_cli run unknown >/dev/null 2>&1; then
+if "${CLI}" run unknown >/dev/null 2>&1; then
   fail 'unknown actions must fail'
 fi
 

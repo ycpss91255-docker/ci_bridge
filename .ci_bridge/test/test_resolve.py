@@ -28,8 +28,7 @@ required_bindings = ["script"]
 PROJECT = """\
 schema_version = 1
 
-[pipelines]
-ci = ["test"]
+pipeline = ["test"]
 
 [bindings.test]
 script = "test/run.sh"
@@ -70,7 +69,7 @@ class ResolverTest(unittest.TestCase):
         (root / "ci-project.toml").write_text(PROJECT.replace('["test"]', "[]"))
 
         self.assert_config_error(
-            "must select at least one action",
+            "pipeline must select at least one action",
             lambda: RESOLVER.build_plan(root, "pipeline", "ci"),
         )
 
@@ -99,6 +98,27 @@ class ResolverTest(unittest.TestCase):
 
         self.assert_config_error(
             "script not found",
+            lambda: RESOLVER.build_plan(root, "pipeline", "ci"),
+        )
+
+    def test_unused_unknown_binding_fails_closed(self) -> None:
+        root = self.make_repo()
+        project = root / "ci-project.toml"
+        project.write_text(PROJECT + '\n[bindings.unknown]\nscript = "test/run.sh"\n')
+
+        self.assert_config_error(
+            "binding names unknown action: unknown",
+            lambda: RESOLVER.build_plan(root, "pipeline", "ci"),
+        )
+
+    def test_plan_delimiter_in_script_path_fails_closed(self) -> None:
+        root = self.make_repo()
+        (root / "ci-project.toml").write_text(
+            PROJECT.replace('"test/run.sh"', '"test/run.sh\\tsecond"')
+        )
+
+        self.assert_config_error(
+            "forbidden control character",
             lambda: RESOLVER.build_plan(root, "pipeline", "ci"),
         )
 
