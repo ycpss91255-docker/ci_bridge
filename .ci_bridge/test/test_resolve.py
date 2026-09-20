@@ -1,0 +1,133 @@
+from __future__ import annotations
+
+import importlib.util
+import os
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+RESOLVER_PATH = Path(__file__).parents[1] / "resolve.py"
+SPEC = importlib.util.spec_from_file_location("ci_bridge_resolve", RESOLVER_PATH)
+assert SPEC is not None and SPEC.loader is not None
+RESOLVER = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = RESOLVER
+SPEC.loader.exec_module(RESOLVER)
+
+
+CATALOG = """\
+schema_version = 1
+
+[action]
+id = "test"
+description = "Run tests"
+required_bindings = ["script"]
+"""
+
+PROJECT = """\
+schema_version = 1
+
+[pipelines]
+ci = ["test"]
+
+[bindings.test]
+script = "test/run.sh"
+"""
+
+
+class ResolverTest(unittest.TestCase):
+    def make_repo(self) -> Path:
+        temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        root = Path(temporary_directory.name)
+        (root / ".ci_action" / "catalog").mkdir(parents=True)
+        (root / "test").mkdir()
+        (root / ".ci_action" / "catalog" / "test.toml").write_text(CATALOG)
+        (root / "ci-project.toml").write_text(PROJECT)
+        script = root / "test" / "run.sh"
+        script.write_text("#!/bin/sh\nexit 0\n")
+        script.chmod(0o755)
+        return root
+
+    def assert_config_error(self, expected: str, callback) -> None:
+        with self.assertRaises(RESOLVER.ConfigError) as raised:
+            callback()
+        self.assertIn(expected, str(raised.exception))
+
+    def test_resolves_managed_action_to_downstream_script(self) -> None:
+        root = self.make_repo()
+
+        plan = RESOLVER.build_plan(root, "pipeline", "ci")
+
+        self.assertEqual(
+            [(task.action_id, str(task.script)) for task in plan],
+            [("test", "test/run.sh")],
+        )
+
+    def test_empty_pipeline_fails_closed(self) -> None:
+        root = self.make_repo()
+        (root / "ci-project.toml").write_text(PROJECT.replace('["test"]', "[]"))
+
+        self.assert_config_error(
+            "must select at least one action",
+            lambda: RESOLVER.build_plan(root, "pipeline", "ci"),
+        )
+
+    def test_duplicate_action_id_fails_closed(self) -> None:
+        root = self.make_repo()
+        (root / ".ci_action" / "catalog" / "duplicate.toml").write_text(CATALOG)
+
+        self.assert_config_error(
+            "duplicate action id 'test'",
+            lambda: RESOLVER.build_plan(root, "pipeline", "ci"),
+        )
+
+    def test_unknown_catalog_key_fails_closed(self) -> None:
+        root = self.make_repo()
+        source = root / ".ci_action" / "catalog" / "test.toml"
+        source.write_text(CATALOG + "\nunsafe = true\n")
+
+        self.assert_config_error(
+            "unknown key(s): unsafe",
+            lambda: RESOLVER.build_plan(root, "pipeline", "ci"),
+        )
+
+    def test_missing_script_fails_closed(self) -> None:
+        root = self.make_repo()
+        (root / "test" / "run.sh").unlink()
+
+        self.assert_config_error(
+            "script not found",
+            lambda: RESOLVER.build_plan(root, "pipeline", "ci"),
+        )
+
+    def test_script_cannot_escape_repository(self) -> None:
+        root = self.make_repo()
+        (root / "ci-project.toml").write_text(
+            PROJECT.replace('"test/run.sh"', '"../outside.sh"')
+        )
+
+        self.assert_config_error(
+            "repo-relative path without '..'",
+            lambda: RESOLVER.build_plan(root, "pipeline", "ci"),
+        )
+
+    def test_symlink_cannot_escape_repository(self) -> None:
+        root = self.make_repo()
+        outside = root.parent / "outside.sh"
+        outside.write_text("#!/bin/sh\nexit 0\n")
+        outside.chmod(0o755)
+        self.addCleanup(lambda: outside.unlink(missing_ok=True))
+        script = root / "test" / "run.sh"
+        script.unlink()
+        os.symlink(outside, script)
+
+        self.assert_config_error(
+            "script resolves outside the repository",
+            lambda: RESOLVER.build_plan(root, "pipeline", "ci"),
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,7 @@
+schema_version = 1
+
+[pipelines]
+ci = ["test"]
+
+[bindings.test]
+script = "test/run.sh"

@@ -1,0 +1,6 @@
+schema_version = 1
+
+[action]
+id = "test"
+description = "Run the downstream repository test entrypoint"
+required_bindings = ["script"]

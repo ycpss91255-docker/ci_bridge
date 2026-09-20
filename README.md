@@ -1,55 +1,58 @@
 # ci_bridge
 
-A minimal proof of concept for running one CI definition on GitHub Actions and GitLab CI.
+A minimal proof of concept for running one validated task plan locally, in
+GitHub Actions, and in GitLab CI.
 
 ## Architecture
 
 ```text
-ci.toml
-   |
-   v
-.generic_action/ci-bridge
-   |
-   +-- scripts/generic/   shared pipeline behaviour
-   +-- scripts/special/   repository-specific hooks
-   |
-   +-- .github/workflows/ci.yaml
-   `-- .gitlab/pipeline.yml
+.ci_bridge/                    managed resolver and executor
+.ci_action/catalog/*.toml      managed approved action catalog
+.github/                       managed GitHub adapter
+.gitlab/                       managed GitLab adapter
+ci-project.toml                downstream task selection and script bindings
+test/, scripts/, src/          downstream-owned, locally runnable content
 ```
 
-The platform adapters only provide checkout and runner orchestration. Both call the same command:
+The action catalog is auto-discovered. File order has no task semantics; action
+IDs must be unique. `ci-project.toml` selects approved actions, and the bridge
+validates the complete resolved plan before executing its first task.
+
+Both platform adapters call the same command:
 
 ```sh
-.generic_action/ci-bridge run smoke
+.ci_bridge/ci-bridge pipeline ci
 ```
 
-`ci-bridge` parses `ci.toml` with the pinned
-`ghcr.io/ycpss91255-docker/toml-bridge:v0.1.0` image. The host contract is Docker and Bash.
-The GitLab adapter provisions both with a pinned Docker CLI image and a
-Docker-in-Docker service; its runner must allow privileged services.
+The bridge uses the pinned
+`ghcr.io/ycpss91255-docker/toml-bridge:v0.1.0` image as its Python/TOML runtime.
+The host contract is Docker and Bash. The GitLab adapter provisions Docker CLI
+and Docker-in-Docker; its runner must allow privileged services.
 
-## Validate locally
-
-Run the fast contract test without Docker or network access. This path uses
-Python 3.11+ only as a test adapter and still parses the real `ci.toml`:
+## Commands
 
 ```sh
-.generic_action/test/smoke_test.sh
+.ci_bridge/ci-bridge validate
+.ci_bridge/ci-bridge catalog
+.ci_bridge/ci-bridge plan ci
+.ci_bridge/ci-bridge run test
+.ci_bridge/ci-bridge pipeline ci
 ```
 
-Run the real TOML parsing path:
-
-```sh
-.generic_action/ci-bridge validate
-.generic_action/ci-bridge run smoke
-```
-
-Expected output:
+Expected pipeline output:
 
 ```text
-generic: start (ci-bridge-demo)
-special: ci-bridge-demo
-generic: ok
+ci-bridge: running test (test/run.sh)
+downstream-test: ok
 ```
 
-This demo intentionally supports one fixed `smoke` job. Pipeline generation, distribution to downstream repositories, cache, artifacts, and matrix execution are outside this first architecture check.
+Run the fast contract test with Python 3.11+ and no Docker/network access:
+
+```sh
+.ci_bridge/test/contract_test.sh
+```
+
+This demo intentionally supports one sequential `ci` pipeline. Parallel DAG
+execution, matrix expansion, distribution to downstream repositories, cache,
+artifacts, and result normalization remain outside this first architecture
+check.

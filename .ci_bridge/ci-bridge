@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+readonly REPO_ROOT
+readonly TOML_BRIDGE_IMAGE="${TOML_BRIDGE_IMAGE:-ghcr.io/ycpss91255-docker/toml-bridge:v0.1.0}"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  .ci_bridge/ci-bridge validate
+  .ci_bridge/ci-bridge catalog
+  .ci_bridge/ci-bridge plan <pipeline>
+  .ci_bridge/ci-bridge run <action>
+  .ci_bridge/ci-bridge pipeline <pipeline>
+EOF
+}
+
+die() {
+  printf 'ci-bridge: %s\n' "$*" >&2
+  exit 1
+}
+
+resolve() {
+  if [[ -n "${CI_BRIDGE_RESOLVER_COMMAND:-}" ]]; then
+    "${CI_BRIDGE_RESOLVER_COMMAND}" \
+      "${SCRIPT_DIR}/resolve.py" --repo-root "${REPO_ROOT}" "$@"
+    return
+  fi
+
+  command -v docker >/dev/null 2>&1 || die 'docker is required to resolve TOML configuration'
+  docker run --rm \
+    --volume "${REPO_ROOT}:/workspace:ro" \
+    --workdir /workspace \
+    --entrypoint python3 \
+    "${TOML_BRIDGE_IMAGE}" \
+    .ci_bridge/resolve.py --repo-root /workspace "$@"
+}
+
+execute_plan() {
+  local mode="$1"
+  local target="$2"
+  local resolved_plan action_id script_path
+
+  resolved_plan="$(resolve "${mode}" "${target}")"
+  [[ -n "${resolved_plan}" ]] || die 'resolved plan contains zero tasks'
+
+  while IFS=$'\t' read -r action_id script_path; do
+    [[ -n "${action_id}" && -n "${script_path}" ]] || die 'resolver returned a malformed task'
+    printf 'ci-bridge: running %s (%s)\n' "${action_id}" "${script_path}"
+    (
+      cd "${REPO_ROOT}"
+      CI_BRIDGE_ACTION_ID="${action_id}" "${REPO_ROOT}/${script_path}"
+    )
+  done <<< "${resolved_plan}"
+}
+
+main() {
+  local command="${1:-}"
+  case "${command}" in
+    validate)
+      [[ "$#" -eq 1 ]] || die 'validate accepts no arguments'
+      resolve pipeline ci >/dev/null
+      printf 'ci-bridge: config valid\n'
+      ;;
+    catalog)
+      [[ "$#" -eq 1 ]] || die 'catalog accepts no arguments'
+      resolve catalog
+      ;;
+    plan)
+      [[ "$#" -eq 2 ]] || die 'plan expects one pipeline name'
+      resolve pipeline "$2"
+      ;;
+    run)
+      [[ "$#" -eq 2 ]] || die 'run expects one action ID'
+      execute_plan action "$2"
+      ;;
+    pipeline)
+      [[ "$#" -eq 2 ]] || die 'pipeline expects one pipeline name'
+      execute_plan pipeline "$2"
+      ;;
+    -h|--help|'')
+      usage
+      ;;
+    *)
+      usage >&2
+      die "unknown command: ${command}"
+      ;;
+  esac
+}
+
+main "$@"

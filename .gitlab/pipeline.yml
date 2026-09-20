@@ -15,5 +15,5 @@ ci-rollup:
     - apk add --no-cache bash python3
     - docker info
   script:
-    - .generic_action/ci-bridge run smoke
-    - .generic_action/test/smoke_test.sh
+    - .ci_bridge/ci-bridge pipeline ci
+    - .ci_bridge/test/contract_test.sh

@@ -17,8 +17,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Run shared smoke pipeline
-        run: .generic_action/ci-bridge run smoke
+      - name: Run shared CI pipeline
+        run: .ci_bridge/ci-bridge pipeline ci
 
       - name: Test bridge contract
-        run: .generic_action/test/smoke_test.sh
+        run: .ci_bridge/test/contract_test.sh
