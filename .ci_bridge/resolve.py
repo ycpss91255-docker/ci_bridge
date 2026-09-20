@@ -125,7 +125,7 @@ def load_catalog(catalog_dir: Path) -> dict[str, Action]:
     return actions
 
 
-def resolve_script(repo_root: Path, raw_path: object, context: str) -> Path:
+def validate_script_path(raw_path: object, context: str) -> Path:
     if not isinstance(raw_path, str) or not raw_path:
         fail(f"{context}: script must be a non-empty string")
 
@@ -135,16 +135,7 @@ def resolve_script(repo_root: Path, raw_path: object, context: str) -> Path:
     if relative_path.is_absolute() or ".." in relative_path.parts:
         fail(f"{context}: script must be a repo-relative path without '..': {raw_path}")
 
-    resolved_root = repo_root.resolve()
-    resolved_script = (resolved_root / relative_path).resolve()
-    if not resolved_script.is_relative_to(resolved_root):
-        fail(f"{context}: script resolves outside the repository: {raw_path}")
-    if not resolved_script.is_file():
-        fail(f"{context}: script not found: {raw_path}")
-    if resolved_script.stat().st_mode & 0o111 == 0:
-        fail(f"{context}: script is not executable: {raw_path}")
-
-    return resolved_script.relative_to(resolved_root)
+    return relative_path
 
 
 def load_project(
@@ -187,8 +178,7 @@ def load_project(
                 f"action '{action_id}' missing required binding(s): "
                 f"{', '.join(missing)}"
             )
-        resolve_script(
-            repo_root,
+        validate_script_path(
             raw_binding["script"],
             f"{source}: bindings.{action_id}",
         )
@@ -232,8 +222,7 @@ def build_plan(repo_root: Path, mode: str, target: str) -> list[PlannedTask]:
         if not isinstance(raw_binding, dict):
             fail(f"action '{action_id}' requires a [bindings.{action_id}] table")
 
-        script = resolve_script(
-            repo_root,
+        script = validate_script_path(
             raw_binding["script"],
             f"ci-project.toml: bindings.{action_id}",
         )

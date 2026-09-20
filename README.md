@@ -28,8 +28,11 @@ The bridge uses `toml-bridge:v0.1.0` pinned by immutable digest as its
 Python/TOML runtime.
 The host contract is Docker and Bash. The GitLab adapter provisions Docker CLI
 and Docker-in-Docker; its runner must allow privileged services.
-The repository snapshot is streamed to the resolver container, so a remote or
-DinD daemon does not need direct access to the job container's filesystem.
+Only the resolver, managed catalog, and project manifest are streamed to the
+resolver container, so a remote or DinD daemon does not need direct access to
+the job filesystem. Downstream scripts remain local; the bridge validates
+their containment and SHA-256 identity before execution and rechecks each one
+immediately before it runs.
 
 ## Commands
 

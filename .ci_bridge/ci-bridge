@@ -29,7 +29,8 @@ resolve() {
 
   local mode="$1"
   local target="${2:-}"
-  tar --exclude=.git --exclude=__pycache__ -C "${REPO_ROOT}" -cf - . \
+  tar -C "${REPO_ROOT}" -cf - \
+      .ci_bridge/resolve.py .ci_action ci-project.toml \
     | docker run --rm -i \
       --env "CI_BRIDGE_MODE=${mode}" \
       --env "CI_BRIDGE_TARGET=${target}" \
@@ -46,22 +47,51 @@ resolve() {
       '
 }
 
-execute_plan() {
-  local mode="$1"
-  local target="$2"
-  local resolved_plan action_id script_path
+script_identity() {
+  local script_path="$1"
+  local resolved_script
 
-  resolved_plan="$(resolve "${mode}" "${target}")"
-  [[ -n "${resolved_plan}" ]] || die 'resolved plan contains zero tasks'
+  resolved_script="$(realpath -e -- "${REPO_ROOT}/${script_path}")" \
+    || die "script not found: ${script_path}"
+  case "${resolved_script}" in
+    "${REPO_ROOT}"/*) ;;
+    *) die "script resolves outside the repository: ${script_path}" ;;
+  esac
+  [[ -f "${resolved_script}" ]] || die "script is not a regular file: ${script_path}"
+  [[ -x "${resolved_script}" ]] || die "script is not executable: ${script_path}"
+  sha256sum -- "${resolved_script}" | awk '{print $1}'
+}
+
+validate_plan_scripts() {
+  local resolved_plan="$1"
+  local action_id script_path digest
 
   while IFS=$'\t' read -r action_id script_path; do
     [[ -n "${action_id}" && -n "${script_path}" ]] || die 'resolver returned a malformed task'
+    digest="$(script_identity "${script_path}")"
+    printf '%s\t%s\t%s\n' "${action_id}" "${script_path}" "${digest}"
+  done <<< "${resolved_plan}"
+}
+
+execute_plan() {
+  local mode="$1"
+  local target="$2"
+  local resolved_plan validated_plan action_id script_path expected_digest actual_digest
+
+  resolved_plan="$(resolve "${mode}" "${target}")"
+  [[ -n "${resolved_plan}" ]] || die 'resolved plan contains zero tasks'
+  validated_plan="$(validate_plan_scripts "${resolved_plan}")"
+
+  while IFS=$'\t' read -r action_id script_path expected_digest; do
+    actual_digest="$(script_identity "${script_path}")"
+    [[ "${actual_digest}" == "${expected_digest}" ]] \
+      || die "script changed after plan validation: ${script_path}"
     printf 'ci-bridge: running %s (%s)\n' "${action_id}" "${script_path}"
     (
       cd "${REPO_ROOT}"
       CI_BRIDGE_ACTION_ID="${action_id}" "${REPO_ROOT}/${script_path}"
     )
-  done <<< "${resolved_plan}"
+  done <<< "${validated_plan}"
 }
 
 main() {
@@ -98,4 +128,6 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

@@ -36,4 +36,10 @@ if "${CLI}" run unknown >/dev/null 2>&1; then
   fail 'unknown actions must fail'
 fi
 
+script_digest="$(bash -c 'source "$1"; script_identity "test/run.sh"' _ "${CLI}")"
+[[ "${#script_digest}" -eq 64 ]] || fail 'script identity must be a SHA-256 digest'
+if bash -c 'source "$1"; script_identity "../../etc/passwd"' _ "${CLI}" >/dev/null 2>&1; then
+  fail 'host script validation must reject repository escapes'
+fi
+
 printf 'PASS: managed catalog and downstream selection contract\n'
