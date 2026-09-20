@@ -1,0 +1,8 @@
+stages:
+  - test
+
+ci-rollup:
+  stage: test
+  script:
+    - .generic_action/ci-bridge run smoke
+    - .generic_action/test/smoke_test.sh

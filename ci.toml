@@ -1,0 +1,7 @@
+[bridge]
+schema_version = 1
+
+[smoke]
+generic_script = ".generic_action/scripts/generic/smoke.sh"
+special_script = ".generic_action/scripts/special/smoke.sh"
+message = "ci-bridge-demo"

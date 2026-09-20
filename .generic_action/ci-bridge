@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly SCRIPT_DIR
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+readonly REPO_ROOT
+readonly CONFIG_FILE="${CI_BRIDGE_CONFIG:-${REPO_ROOT}/ci.toml}"
+readonly TOML_BRIDGE_IMAGE="${TOML_BRIDGE_IMAGE:-ghcr.io/ycpss91255-docker/toml-bridge:v0.1.0}"
+
+usage() {
+  cat <<'EOF'
+Usage:
+  .generic_action/ci-bridge validate
+  .generic_action/ci-bridge run smoke
+EOF
+}
+
+die() {
+  printf 'ci-bridge: %s\n' "$*" >&2
+  exit 1
+}
+
+parse_config() {
+  [[ -f "${CONFIG_FILE}" ]] || die "config not found: ${CONFIG_FILE}"
+
+  if [[ -n "${CI_BRIDGE_TOML_COMMAND:-}" ]]; then
+    "${CI_BRIDGE_TOML_COMMAND}" "${CONFIG_FILE}"
+    return
+  fi
+
+  command -v docker >/dev/null 2>&1 || die "docker is required to parse ci.toml"
+  docker run --rm -i "${TOML_BRIDGE_IMAGE}" --kv < "${CONFIG_FILE}"
+}
+
+config_value() {
+  local section="$1"
+  local key="$2"
+  local row_section row_key row_value
+
+  while IFS=$'\t' read -r row_section row_key row_value; do
+    if [[ "${row_section}" == "${section}" && "${row_key}" == "${key}" ]]; then
+      printf '%s\n' "${row_value}"
+      return 0
+    fi
+  done <<< "${PARSED_CONFIG}"
+
+  return 1
+}
+
+require_repo_script() {
+  local path="$1"
+  local expected_prefix="$2"
+
+  [[ "${path}" == "${expected_prefix}"* ]] || die "script must be under ${expected_prefix}: ${path}"
+  [[ "${path}" != *'/../'* && "${path}" != '../'* ]] || die "script path may not traverse directories: ${path}"
+  [[ -f "${REPO_ROOT}/${path}" ]] || die "script not found: ${path}"
+  [[ -x "${REPO_ROOT}/${path}" ]] || die "script is not executable: ${path}"
+}
+
+validate_config() {
+  local schema_version generic_script special_script
+
+  schema_version="$(config_value bridge schema_version)" || die "missing bridge.schema_version"
+  [[ "${schema_version}" == "1" ]] || die "unsupported bridge.schema_version: ${schema_version}"
+
+  generic_script="$(config_value smoke generic_script)" || die "missing smoke.generic_script"
+  special_script="$(config_value smoke special_script)" || die "missing smoke.special_script"
+  config_value smoke message >/dev/null || die "missing smoke.message"
+
+  require_repo_script "${generic_script}" '.generic_action/scripts/generic/'
+  require_repo_script "${special_script}" '.generic_action/scripts/special/'
+}
+
+run_smoke() {
+  local generic_script special_script message
+
+  validate_config
+  generic_script="$(config_value smoke generic_script)"
+  special_script="$(config_value smoke special_script)"
+  message="$(config_value smoke message)"
+
+  CI_BRIDGE_MESSAGE="${message}" \
+  CI_BRIDGE_SPECIAL_SCRIPT="${REPO_ROOT}/${special_script}" \
+    "${REPO_ROOT}/${generic_script}"
+}
+
+main() {
+  local command="${1:-}"
+  PARSED_CONFIG="$(parse_config)"
+  readonly PARSED_CONFIG
+
+  case "${command}" in
+    validate)
+      [[ "$#" -eq 1 ]] || die 'validate accepts no arguments'
+      validate_config
+      printf 'ci-bridge: config valid\n'
+      ;;
+    run)
+      [[ "$#" -eq 2 ]] || die 'run expects one job name'
+      [[ "$2" == 'smoke' ]] || die "unknown job: $2"
+      run_smoke
+      ;;
+    -h|--help|'')
+      usage
+      ;;
+    *)
+      usage >&2
+      die "unknown command: ${command}"
+      ;;
+  esac
+}
+
+main "$@"
